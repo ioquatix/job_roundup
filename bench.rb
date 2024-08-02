@@ -6,9 +6,6 @@ Rails.logger.level = Logger::WARN
 ActiveJob::Base.queue_adapter = :async
 Sidekiq.redis { |c| c.flushdb }
 
-require 'async/job'
-require 'async/job/adapter/active_job/dispatcher'
-
 # You can run this to clear all data from PG and Redis
 # rake db:drop db:create db:migrate ; redis-cli flushall
 raise "Databases not empty" unless [GoodJob::Job.count, SolidQueue::Job.count, Sidekiq::Queue.new.size].all?(&:zero?)
@@ -66,11 +63,28 @@ Benchmark.driver do |x|
     end
   RUBY
 
-  x.report "sidekiq-native-enq-bulk", <<~RUBY
-    RoundupWorker.perform_bulk(jobs.times.map { [123, "hello world", hash] })
+  # x.report "sidekiq-native-enq-bulk", <<~RUBY
+  #   RoundupWorker.perform_bulk(jobs.times.map { [123, "hello world", hash] })
+  # RUBY
+  
+  x.report "async-job", <<~RUBY
+    require 'async/job'
+    require 'async/job/buffer'
+    
+    Async do
+      buffer = Async::Job::Buffer.new # where to put the jobs when dequeued
+      server = Async::Job::Backend::Redis.new(buffer)
+      
+      jobs.times do
+        server.call({job: RoundupJob, args: [123, "hello world", hash]})
+      end
+    end
   RUBY
   
   x.report "async-job-adapter-active_job", <<~RUBY
+    require 'async/job'
+    require 'async/job/adapter/active_job/dispatcher'
+    
     dispatcher = Async::Job::Adapter::ActiveJob::Dispatcher.new({
       "default" => proc do
         queue Async::Job::Backend::Redis
